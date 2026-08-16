@@ -1,18 +1,32 @@
 name: Publish
 
-# Publishing happens only from a tag, and only from CI, so the tarball on npm
-# carries provenance linking it to the exact commit and workflow that built it.
+# Publishes on every push to main, but only when the version in package.json
+# isn't already on npm. Bumping the version in a PR is the release signal — it
+# gets reviewed with the code, and merging is what ships it.
+#
+# Auth is npm trusted publishing (OIDC): no token is stored in this repo, and
+# none is exposed to the runner. GitHub mints a short-lived credential that npm
+# verifies against the publisher configured on the package, so there is nothing
+# for a malicious dependency to read out of the environment.
+#
+# Configure it once at npmjs.com → the package → Settings → Trusted Publisher:
+#   Provider:   GitHub Actions
+#   Repository: IndigoSoftwares21/dreep-js
+#   Workflow:   publish.yml
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  # Lets a failed publish be re-run without an empty commit.
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      # Required for npm provenance — mints the OIDC token npm verifies against.
+      # Pushes the release tag after a successful publish.
+      contents: write
+      # Mints the OIDC token. Without this the publish falls back to looking for
+      # a token and fails.
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -21,15 +35,48 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: npm
 
-      # `npm ci --ignore-scripts` installs the lockfile exactly and refuses to
-      # run any dependency's install hooks.
-      - run: npm ci --ignore-scripts
+      # Trusted publishing needs npm 11.5.1+; Node 22 still ships npm 10.
+      - run: npm install -g npm@latest
 
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+      # Is this version already out? `npm view` exits non-zero for a version
+      # that doesn't exist, which is exactly the signal we want.
+      - name: Check whether this version is published
+        id: check
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          if npm view "dreep@$VERSION" version > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "dreep@$VERSION is already on npm — nothing to do."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "dreep@$VERSION is new — publishing."
+          fi
+
+      - if: steps.check.outputs.published == 'false'
+        run: npm ci --ignore-scripts
+
+      - if: steps.check.outputs.published == 'false'
+        run: npm run typecheck
+
+      - if: steps.check.outputs.published == 'false'
+        run: npm test
+
+      - if: steps.check.outputs.published == 'false'
+        run: npm run build
+
+      # --provenance publishes a signed attestation linking the tarball to this
+      # commit and workflow, which npm shows on the package page.
+      - if: steps.check.outputs.published == 'false'
+        run: npm publish --provenance --access public
+
+      # Tagged after the fact, so the tag only ever points at something that
+      # actually shipped.
+      - if: steps.check.outputs.published == 'false'
+        name: Tag the release
+        run: |
+          git tag "v${{ steps.check.outputs.version }}"
+          git push origin "v${{ steps.check.outputs.version }}"

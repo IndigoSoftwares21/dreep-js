@@ -462,7 +462,7 @@ first so we can agree on the shape before you write code.
 Requires Node.js 18 or later.
 
 ```bash
-git clone https://github.com/dreep/dreep-js
+git clone https://github.com/IndigoSoftwares21/dreep-js
 cd dreep-js
 npm ci            # not `npm install` — respects the lockfile exactly
 npm test

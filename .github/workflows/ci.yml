@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Typecheck and unit tests. Node 22+ only: the tests run the .ts files
+  # directly via native type stripping, which is a development convenience and
+  # says nothing about what the published package supports.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # --ignore-scripts: nothing in the tree needs an install hook, and
+      # refusing to run them removes the usual supply-chain entry point.
+      - run: npm ci --ignore-scripts
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # The tarball is what users actually get, so CI checks that rather than
+      # the working tree.
+      - run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-tarball
+          path: dreep-*.tgz
+          retention-days: 7
+
+  # package.json claims Node >=18. This proves it, by installing the built
+  # tarball on each supported version and importing it both ways — the failure
+  # this catches is an ESM-only or too-new-syntax build that the 22-only test
+  # job would happily pass.
+  compatibility:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22, 24]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-tarball
+
+      - name: Install the packed tarball
+        run: |
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          echo '{"name":"consumer","version":"1.0.0","type":"module"}' > package.json
+          npm install "$GITHUB_WORKSPACE"/dreep-*.tgz
+
+      - name: import (ESM)
+        working-directory: /tmp/consumer
+        run: |
+          cat > esm.mjs <<'EOF'
+          import { Dreep, DreepError } from "dreep";
+          const dreep = new Dreep({ apiKey: "drp_live_ci" });
+          const url = dreep.url({ url: "https://cdn.dreep.cloud/api/v1/fetch/x" }, { width: 400 });
+          if (!url.endsWith("?width=400")) throw new Error(`unexpected url: ${url}`);
+          if (typeof DreepError !== "function") throw new Error("errors not exported");
+          console.log("ESM ok:", url);
+          EOF
+          node esm.mjs
+
+      - name: require (CommonJS)
+        working-directory: /tmp/consumer
+        run: |
+          cat > cjs.cjs <<'EOF'
+          const { Dreep } = require("dreep");
+          const dreep = new Dreep({ apiKey: "drp_live_ci" });
+          console.log("CJS ok:", dreep.url("https://cdn.dreep.cloud/api/v1/fetch/x", { width: 200 }));
+          EOF
+          node cjs.cjs
