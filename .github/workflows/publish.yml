@@ -1,0 +1,35 @@
+name: Publish
+
+# Publishing happens only from a tag, and only from CI, so the tarball on npm
+# carries provenance linking it to the exact commit and workflow that built it.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance — mints the OIDC token npm verifies against.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # `npm ci --ignore-scripts` installs the lockfile exactly and refuses to
+      # run any dependency's install hooks.
+      - run: npm ci --ignore-scripts
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

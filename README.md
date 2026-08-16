@@ -33,7 +33,7 @@ import { Dreep } from "dreep";
 const dreep = new Dreep({ apiKey: process.env.DREEP_API_KEY });
 
 // Upload a file, resized and converted on the way in
-const asset = await dreep.media.upload({
+const asset = await dreep.upload({
   file: fs.createReadStream("hero.jpg"),
   folder: "marketing/2026",
   transform: { width: 1200, format: "webp" },
@@ -43,8 +43,8 @@ console.log(asset.url);
 // https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b
 
 // Build a transformed URL for the same asset — no network call
-dreep.url(asset.id, { width: 400, format: "webp" });
-// https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b.webp?width=400
+dreep.url(asset, { width: 400, format: "webp" });
+// https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b?width=400&format=webp
 ```
 
 ## Authentication
@@ -53,7 +53,7 @@ Create an API key in the **API Keys** page of your Dreep dashboard.
 
 ```ts
 const dreep = new Dreep({
-  apiKey: process.env.DREEP_API_KEY,               // required — "drp_live_…"
+  apiKey: process.env.DREEP_API_KEY, // required — "drp_live_…"
   signingSecret: process.env.DREEP_SIGNING_SECRET, // optional — only for signedUrl()
 });
 ```
@@ -71,7 +71,7 @@ const dreep = new Dreep({
 The file streams through the Dreep API. Simplest option, good up to a few hundred MB.
 
 ```ts
-const asset = await dreep.media.upload({
+const asset = await dreep.upload({
   file: fs.createReadStream("hero.jpg"),
   folder: "marketing/2026",
 });
@@ -81,7 +81,7 @@ const asset = await dreep.media.upload({
 explicitly when the source doesn't carry one:
 
 ```ts
-const asset = await dreep.media.upload({ file: buffer, filename: "hero.jpg" });
+const asset = await dreep.upload({ file: buffer, filename: "hero.jpg" });
 ```
 
 Every upload resolves to the stored asset:
@@ -107,28 +107,34 @@ Every upload resolves to the stored asset:
 asset lands in the project's default folder:
 
 ```ts
-{ folder: "avatars/2024/q1" }        // slug path; missing folders are created
-{ key: "avatars/2024/q1/me.webp" }   // S3-style key; last segment is the filename
-{ folderId: "78b52933-…" }           // UUID of an existing folder
+{
+  folder: "avatars/2024/q1";
+} // slug path; missing folders are created
+{
+  key: "avatars/2024/q1/me.webp";
+} // S3-style key; last segment is the filename
+{
+  folderId: "78b52933-…";
+} // UUID of an existing folder
 ```
 
 Pass `autoCreateFolders: false` to require that the path already exists — an unknown
 path then throws `DreepNotFoundError` instead of creating the folders.
 
-**Transforming on upload.** Anything in `transform` is applied *before* storage, so the
+**Transforming on upload.** Anything in `transform` is applied _before_ storage, so the
 transformed result is what gets stored and returned — the original is not kept:
 
 ```ts
-const asset = await dreep.media.upload({
+const asset = await dreep.upload({
   file,
   transform: { width: 800, format: "webp", quality: 80 },
 });
 
-asset.width;   // 800
-asset.format;  // "webp"
+asset.width; // 800
+asset.format; // "webp"
 
 // or apply a saved preset
-const thumb = await dreep.media.upload({ file, presetKey: "thumbnail" });
+const thumb = await dreep.upload({ file, presetKey: "thumbnail" });
 ```
 
 This counts against your plan's monthly transformation quota.
@@ -139,7 +145,7 @@ The bytes go straight to storage and never pass through the Dreep API. Three ste
 
 ```ts
 // 1. On your server — get a short-lived upload URL
-const upload = await dreep.uploads.presign({
+const upload = await dreep.presignUpload({
   filename: "video.mp4",
   contentType: "video/mp4",
   sizeBytes: 84_000_000,
@@ -150,7 +156,7 @@ const upload = await dreep.uploads.presign({
 await fetch(upload.uploadUrl, { method: "PUT", body: file });
 
 // 3. On your server — finalize
-const asset = await dreep.uploads.confirm(upload.id);
+const asset = await dreep.confirmUpload(upload.id);
 ```
 
 Until `confirm` is called the asset stays `pending` and is excluded from media listings.
@@ -160,56 +166,67 @@ tell you if it already stores that content. When it does, `uploadUrl` is absent 
 can go straight to confirm:
 
 ```ts
-const upload = await dreep.uploads.presign({ …, contentHash });
+const upload = await dreep.presignUpload({ …, contentHash });
 
 if (!upload.alreadyExists) {
   await fetch(upload.uploadUrl!, { method: "PUT", body: file });
 }
 
-const asset = await dreep.uploads.confirm(upload.id);
+const asset = await dreep.confirmUpload(upload.id);
 ```
 
 `confirm` also accepts a transform, applied before the asset goes `ready`:
 
 ```ts
-const asset = await dreep.uploads.confirm(upload.id, {
+const asset = await dreep.confirmUpload(upload.id, {
   transform: { width: 1200, format: "webp" },
 });
 ```
 
 ## Serving media
 
-### `dreep.url(id, transform?)`
-
-Builds a delivery URL. Pure string construction — no network call, no API key involved,
-safe to call in a hot render path.
+Every asset comes back with a ready-to-use `url` — use it as is:
 
 ```ts
-dreep.url(id);
-// https://cdn.dreep.cloud/api/v1/fetch/<id>
-
-dreep.url(id, { width: 400, height: 400, fit: "cover", format: "webp" });
-// https://cdn.dreep.cloud/api/v1/fetch/<id>.webp?width=400&height=400&fit=cover
-
-dreep.url(id, { preset: "thumbnail" });
-// https://cdn.dreep.cloud/api/v1/fetch/<id>?p=thumbnail
+<img src={asset.url} />
 ```
 
-Transforms run on the fly and are cached, so a single original serves every size you ask
-for. Requesting an image format on a video extracts a thumbnail; requesting `txt` on an
-image or PDF runs OCR and returns plain text.
+### `dreep.url(asset, transform)`
 
-### `dreep.signedUrl(id, options)`
-
-For assets in **signed** folders, which aren't fetchable with a bare URL. Generates a
-time-limited link using your project's signing secret. Requires `signingSecret` in the
-client config.
+Applies a transform to an asset's URL by appending query parameters. It never builds a
+URL from scratch — the host and API version are the API's to decide, so the SDK only ever
+adds to what the API handed back.
 
 ```ts
-dreep.signedUrl(id, { expiresIn: 3600 });
-// …/fetch/<id>?exp=1774118400&sig=a3f9e2b1…
+asset.url;
+// https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b
 
-dreep.signedUrl(id, { expiresIn: 900, transform: { width: 800 } });
+dreep.url(asset, { width: 400, height: 400, fit: "cover", format: "webp" });
+// https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b?width=400&height=400&fit=cover&format=webp
+
+dreep.url(asset, { preset: "thumbnail" });
+// https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b?p=thumbnail
+```
+
+Pure string work — no network call and no API key, so it's safe in a hot render path. If
+you store URLs rather than assets, pass the string directly: `dreep.url(storedUrl, { width: 400 })`.
+
+Transforms run on the fly and are cached, so one original serves every size you ask for.
+Requesting an image format on a video extracts a thumbnail; requesting `txt` on an image
+or PDF runs OCR and returns plain text.
+
+### `dreep.signedUrl(asset, options)`
+
+For assets in **signed** folders, which aren't fetchable with a bare URL. Appends a
+time-limited `exp` and `sig` using your project's signing secret. Requires
+`signingSecret` in the client config, and the asset's `id` — the signature is computed
+over it — so this one takes the asset, not a bare URL string.
+
+```ts
+dreep.signedUrl(asset, { expiresIn: 3600 });
+// …/fetch/2f928a3f-1d2a-4a2b?exp=1774118400&sig=a3f9e2b1…
+
+dreep.signedUrl(asset, { expiresIn: 900, transform: { width: 800 } });
 ```
 
 The link stops working at `exp`. Anyone holding it can fetch the asset until then — no
@@ -217,25 +234,25 @@ API key needed — so treat a signed URL as a bearer token and keep expiries sho
 
 ### Transform parameters
 
-Accepted by `url()`, `signedUrl()`, `media.upload()` and `uploads.confirm()`:
+Accepted by `url()`, `signedUrl()`, `upload()` and `confirmUpload()`:
 
-| Parameter | Applies to | Description |
-| --- | --- | --- |
-| `format` | image, video, audio | Output format. Images: `jpeg`, `png`, `webp`, `avif`, `tiff`, `gif`, `heic`, `heif`. Videos: `mp4`, `webm`, `mov`, `hls`, `m3u8`, `gif`. Audio: `mp3`, `wav`, `aac`. Text: `txt` (runs OCR) |
-| `width`, `height` | image, video | Target size in pixels, max 4000 |
-| `fit` | image, video | `cover`, `contain`, `fill`, `inside`, `outside` |
-| `quality` | image, video | 1–100 |
-| `gravity` | image | Crop anchor when resizing |
-| `crop` | image | Explicit crop, `left,top,width,height` |
-| `dpr` | image | Device pixel ratio multiplier, max 3 |
-| `rotate` | image | `90`, `180` or `270` |
-| `blur` | image | Blur sigma |
-| `bg` | image | Hex fill colour without `#`, e.g. `ffffff` |
-| `radius` | image | Corner radius in px, or `max` for a circle |
-| `trimStart`, `trimEnd` | video | Trim points in seconds |
-| `videoCodec` | video | `h264`, `vp8`, `vp9`, `hevc` |
-| `fps` | video | Output frame rate |
-| `preset` | image, video | A saved preset key, applied instead of individual fields |
+| Parameter              | Applies to          | Description                                                                                                                                                                                 |
+| ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`               | image, video, audio | Output format. Images: `jpeg`, `png`, `webp`, `avif`, `tiff`, `gif`, `heic`, `heif`. Videos: `mp4`, `webm`, `mov`, `hls`, `m3u8`, `gif`. Audio: `mp3`, `wav`, `aac`. Text: `txt` (runs OCR) |
+| `width`, `height`      | image, video        | Target size in pixels, max 4000                                                                                                                                                             |
+| `fit`                  | image, video        | `cover`, `contain`, `fill`, `inside`, `outside`                                                                                                                                             |
+| `quality`              | image, video        | 1–100                                                                                                                                                                                       |
+| `gravity`              | image               | Crop anchor when resizing                                                                                                                                                                   |
+| `crop`                 | image               | Explicit crop, `left,top,width,height`                                                                                                                                                      |
+| `dpr`                  | image               | Device pixel ratio multiplier, max 3                                                                                                                                                        |
+| `rotate`               | image               | `90`, `180` or `270`                                                                                                                                                                        |
+| `blur`                 | image               | Blur sigma                                                                                                                                                                                  |
+| `bg`                   | image               | Hex fill colour without `#`, e.g. `ffffff`                                                                                                                                                  |
+| `radius`               | image               | Corner radius in px, or `max` for a circle                                                                                                                                                  |
+| `trimStart`, `trimEnd` | video               | Trim points in seconds                                                                                                                                                                      |
+| `videoCodec`           | video               | `h264`, `vp8`, `vp9`, `hevc`                                                                                                                                                                |
+| `fps`                  | video               | Output frame rate                                                                                                                                                                           |
+| `preset`               | image, video        | A saved preset key, applied instead of individual fields                                                                                                                                    |
 
 Conversion stays within media families — image to image, video to video, HLS or GIF.
 Raw files such as PDFs are stored as-is and can't be format-converted.
@@ -243,21 +260,25 @@ Raw files such as PDFs are stored as-is and can't be format-converted.
 ## Media
 
 ```ts
-// One page — each item carries id, filename, url, folder, folderId
-const assets = await dreep.media.list({ page: 1, limit: 20 });
+// One page, plus the totals
+const { assets, pagination } = await dreep.listMedia({ page: 1, limit: 20 });
 
-assets[0].url;  // https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b
+assets[0].url; // https://cdn.dreep.cloud/api/v1/fetch/2f928a3f-1d2a-4a2b
+pagination.total; // 127 — every asset matching the filter, across all pages
 
 // Filter by folder
-const avatars = await dreep.media.list({ folder: "avatars/2024", recursive: true });
-const byId = await dreep.media.list({ folderId: "78b52933-…" });
+const avatars = await dreep.listMedia({
+  folder: "avatars/2024",
+  recursive: true,
+});
+const byId = await dreep.listMedia({ folderId: "78b52933-…" });
 
 // Walk every page
-for await (const asset of dreep.media.listAll({ folder: "avatars" })) {
+for await (const asset of dreep.listAllMedia({ folder: "avatars" })) {
   console.log(asset.filename, asset.url);
 }
 
-await dreep.media.delete(id);
+await dreep.deleteMedia({ id });
 ```
 
 Deleting an asset removes the original from storage along with every cached transform of
@@ -269,31 +290,33 @@ Folders carry access control, which every asset inside inherits.
 
 ```ts
 // Creates missing segments, resolves to the leaf folder
-const launch = await dreep.folders.create({ path: "2026/q1/launch" });
-launch.id;    // "78b52933-…"  — pass to uploads as folderId
-launch.path;  // "2026/q1/launch"
+const launch = await dreep.createFolder({ path: "2026/q1/launch" });
+launch.id; // "78b52933-…"  — pass to uploads as folderId
+launch.path; // "2026/q1/launch"
 
-const avatars = await dreep.folders.create({
+const avatars = await dreep.createFolder({
   name: "Avatars",
   accessControlType: "signed",
   defaultExpirySeconds: 3600,
 });
 
-const { folders } = await dreep.folders.list();                    // whole project, any depth
-const { folders, currentFolder } = await dreep.folders.list({ path: "avatars/2024" });
+const { folders } = await dreep.listFolders(); // whole project, any depth
+const { folders, currentFolder } = await dreep.listFolders({
+  path: "avatars/2024",
+});
 ```
 
 Each folder carries `id`, `name`, `slug`, `path`, `parentId` and `accessControlType`.
 Because `path` is the full slug path from the project root, one unfiltered `list()` is
 enough to build the entire tree.
 
-| Access | Who can fetch it |
-| --- | --- |
-| `public` | Anyone with the URL. The default |
-| `private` | Nobody through the public API — dashboard members only |
-| `signed` | Anyone holding an unexpired [signed URL](#dreepsignedurlid-options) |
+| Access    | Who can fetch it                                                    |
+| --------- | ------------------------------------------------------------------- |
+| `public`  | Anyone with the URL. The default                                    |
+| `private` | Nobody through the public API — dashboard members only              |
+| `signed`  | Anyone holding an unexpired [signed URL](#dreepsignedurlid-options) |
 
-Uploads create folders on demand, so `folders.create` is only necessary when you want to
+Uploads create folders on demand, so `createFolder` is only necessary when you want to
 set access control up front.
 
 ## Presets
@@ -302,7 +325,7 @@ A named transform you can apply by key, so callers don't repeat parameters and y
 change the recipe without touching call sites.
 
 ```ts
-const preset = await dreep.presets.create({
+const preset = await dreep.createPreset({
   key: "thumbnail",
   name: "Thumbnail",
   width: 200,
@@ -311,11 +334,11 @@ const preset = await dreep.presets.create({
   format: "webp",
 });
 
-const presets = await dreep.presets.list();
-await dreep.presets.delete(preset.id);
+const presets = await dreep.listPresets();
+await dreep.deletePreset({ id: preset.id });
 
 // then, anywhere
-dreep.url(id, { preset: "thumbnail" });
+dreep.url(asset, { preset: "thumbnail" });
 ```
 
 ## OCR
@@ -323,10 +346,13 @@ dreep.url(id, { preset: "thumbnail" });
 Extracts text from an image or PDF.
 
 ```ts
-const { text, blocks } = await dreep.ocr.extract({ file });
+const { text, blocks } = await dreep.extractText({ file });
 
 // Save the extracted text into Dreep as a .txt asset
-const { text, savedAsset } = await dreep.ocr.extract({ file, folder: "receipts/2026" });
+const { text, savedAsset } = await dreep.extractText({
+  file,
+  folder: "receipts/2026",
+});
 ```
 
 `blocks` carries the raw line and word objects with bounding boxes, for when you need
@@ -335,7 +361,7 @@ positions rather than just the concatenated text.
 Already-uploaded assets can be read without re-uploading, via the `txt` format:
 
 ```ts
-dreep.url(id, { format: "txt" });
+dreep.url(asset, { format: "txt" });
 ```
 
 ## Background removal
@@ -343,21 +369,21 @@ dreep.url(id, { format: "txt" });
 Returns a cutout of the subject with a transparent background, stored as a new asset.
 
 ```ts
-const asset = await dreep.media.removeBackground({ file, folder: "products" });
+const asset = await dreep.removeBackground({ file, folder: "products" });
 ```
 
 The alpha channel is preserved rather than flattened, so one removal serves any number
 of background colours as ordinary transforms:
 
 ```ts
-dreep.url(asset.id, { bg: "ffffff" });
-dreep.url(asset.id, { bg: "000000" });
+dreep.url(asset, { bg: "ffffff" });
+dreep.url(asset, { bg: "000000" });
 ```
 
 ## Usage
 
 ```ts
-const { usage, limits } = await dreep.usage.get();
+const { usage, limits } = await dreep.getUsage();
 
 console.log(`${usage.storageBytes} of ${limits.storageBytes} bytes used`);
 ```
@@ -371,7 +397,7 @@ message.
 import { DreepError, DreepLimitError, DreepNotFoundError } from "dreep";
 
 try {
-  const asset = await dreep.media.upload({ file });
+  const asset = await dreep.upload({ file });
   return asset.url;
 } catch (error) {
   if (error instanceof DreepLimitError) {
@@ -383,14 +409,14 @@ try {
 }
 ```
 
-| Class | Status | Raised when |
-| --- | --- | --- |
-| `DreepAuthError` | 401 | Missing, malformed or revoked API key |
-| `DreepValidationError` | 400 | Invalid parameters — `error.validationErrors` lists each field |
-| `DreepNotFoundError` | 404 | Unknown asset, folder or preset |
-| `DreepConflictError` | 409 | Confirming an upload whose bytes haven't landed yet |
-| `DreepLimitError` | 402 | Plan limit reached — carries `featureKey`, `used`, `limit` |
-| `DreepConnectionError` | — | Network failure or timeout |
+| Class                  | Status | Raised when                                                    |
+| ---------------------- | ------ | -------------------------------------------------------------- |
+| `DreepAuthError`       | 401    | Missing, malformed or revoked API key                          |
+| `DreepValidationError` | 400    | Invalid parameters — `error.validationErrors` lists each field |
+| `DreepNotFoundError`   | 404    | Unknown asset, folder or preset                                |
+| `DreepConflictError`   | 409    | Confirming an upload whose bytes haven't landed yet            |
+| `DreepLimitError`      | 402    | Plan limit reached — carries `featureKey`, `used`, `limit`     |
+| `DreepConnectionError` | —      | Network failure or timeout                                     |
 
 Timeouts and 5xx responses on safe, idempotent requests are retried twice with
 exponential backoff. Uploads are never retried automatically.
@@ -401,11 +427,14 @@ Requests time out after 30 seconds. Uploads don't — a large file can legitimat
 minutes — so pass a `signal` when you want to bound one:
 
 ```ts
-const asset = await dreep.media.upload({ file, signal: AbortSignal.timeout(120_000) });
+const asset = await dreep.upload({
+  file,
+  signal: AbortSignal.timeout(120_000),
+});
 
 const controller = new AbortController();
-const pending = dreep.media.list({ signal: controller.signal });
-controller.abort();  // throws DreepConnectionError
+const pending = dreep.listMedia({ signal: controller.signal });
+controller.abort(); // throws DreepConnectionError
 ```
 
 Every method accepts `signal`.
@@ -418,9 +447,9 @@ discriminated set, so invalid combinations are caught at compile time:
 ```ts
 import type { Asset, Folder, Preset, TransformParams } from "dreep";
 
-dreep.url(id, { width: 400, fit: "cover" });     // ok
-dreep.url(id, { fit: "squish" });                // Type error
-dreep.url(id, { width: 99_999 });                // Type error — max 4000
+dreep.url(asset, { width: 400, fit: "cover" }); // ok
+dreep.url(asset, { fit: "squish" }); // Type error
+dreep.url(asset, { width: 99_999 }); // Type error — max 4000
 ```
 
 ## Contributing
@@ -439,13 +468,13 @@ npm ci            # not `npm install` — respects the lockfile exactly
 npm test
 ```
 
-| Script | What it does |
-| --- | --- |
-| `npm run build` | Two `tsc` passes → ESM in `dist/`, CJS in `dist/cjs/`, plus `.d.ts` |
-| `npm test` | Unit tests via the built-in `node:test` runner, `fetch` stubbed |
-| `npm run test:integration` | Hits a real API — needs `DREEP_API_KEY`, skipped without it |
-| `npm run typecheck` | `tsc --noEmit` across src and tests |
-| `npm run lint` | Formatting and lint |
+| Script                     | What it does                                                        |
+| -------------------------- | ------------------------------------------------------------------- |
+| `npm run build`            | Two `tsc` passes → ESM in `dist/`, CJS in `dist/cjs/`, plus `.d.ts` |
+| `npm test`                 | Unit tests via the built-in `node:test` runner, `fetch` stubbed     |
+| `npm run test:integration` | Hits a real API — needs `DREEP_API_KEY`, skipped without it         |
+| `npm run typecheck`        | `tsc --noEmit` across src and tests                                 |
+| `npm run lint`             | Formatting and lint                                                 |
 
 ### Running against a local API
 

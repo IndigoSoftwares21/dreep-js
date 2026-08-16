@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "dist/esm",
+    "rootDir": "src",
+    "noEmit": false
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "tsc-alias": {
+    "resolveFullPaths": true
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "name": "dreep",
+  "version": "0.1.0",
+  "description": "The official Node.js SDK for Dreep \u2014 media storage, image and video transformation, OCR, and background removal.",
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "npm run clean && npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && tsc-alias -p tsconfig.cjs.json && node scripts/writeCjsPackageJson.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "node --import ./scripts/registerAliasHook.mjs --test \"src/**/*.test.ts\"",
+    "test:watch": "node --import ./scripts/registerAliasHook.mjs --test --watch \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "test:integration": "node --env-file=.env --import ./scripts/registerAliasHook.mjs --test \"src/**/*.integration.ts\""
+  },
+  "keywords": [
+    "dreep",
+    "cdn",
+    "media",
+    "image",
+    "video",
+    "transformation",
+    "upload",
+    "ocr",
+    "storage"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dreep/dreep-js.git"
+  },
+  "homepage": "https://dreep.cloud",
+  "bugs": {
+    "url": "https://github.com/dreep/dreep-js/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^7.0.2"
+  }
+}
